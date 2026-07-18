@@ -5,5 +5,7 @@
   "author": "purcwix",
   "license": "MIT",
   "main": "src/main.nv",
-  "dependencies": {}
+  "dependencies": {
+    "nvo-cron": "^1.0.3"
+  }
 }
