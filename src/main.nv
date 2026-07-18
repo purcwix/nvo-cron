@@ -1,154 +1,467 @@
-// semver.nv - Semantic Versioning library for Nova
-
-function parseSemver(str) {
-    if str == null { return null; }
-
-    // split build metadata first
-    let buildMeta = "";
-    let plusIdx = str.indexOf("+");
-    if plusIdx != -1 {
-        buildMeta = str.slice(plusIdx + 1);
-        str = str.slice(0, plusIdx);
-    }
-
-    // split pre-release
-    let pre = "";
-    let dashIdx = str.indexOf("-");
-    if dashIdx != -1 {
-        pre = str.slice(dashIdx + 1);
-        str = str.slice(0, dashIdx);
-    }
-
-    // split major.minor.patch
-    let parts = str.split(".");
-    if parts.length != 3 { return null; }
-
-    let major = Std.number(parts[0]);
-    let minor = Std.number(parts[1]);
-    let _patch = Std.number(parts[2]);
-
-    if major != major { return null; } // NaN check
-    if minor != minor { return null; }
-    if _patch != _patch { return null; }
-
-    return {
-        major: major,
-        minor: minor,
-        patch: _patch,
-        pre: pre,
-        build: buildMeta,
-    };
+var FIELD_NAMES = ["minute", "hour", "day", "month", "weekday"];
+var FIELD_MIN = [0, 0, 1, 1, 0];
+var FIELD_MAX = [59, 23, 31, 12, 7];
+// weekday 0-7, 7 treated as 0 (Sunday)
+var MONTH_ALIASES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+var WEEKDAY_ALIASES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+// ---------- helpers ----------
+function isDigit(ch) {
+  return ch >= "0" and ch <= "9";
 }
-
-function validSemver(str) {
-    return parseSemver(str) != null;
+function toInt(str) {
+  var i = 0;
+  var neg = false;
+  var result = 0;
+  if str.length > 0 and str.charAt(0) == "-" {
+    neg = true;
+    i = 1;
+  }
+  for null; i < str.length; i = i + 1 {
+    var ch = str.charAt(i);
+    if not isDigit(ch) {
+      return null;
+    }
+    result = result * 10 + (ch.charCodeAt(0) - "0".charCodeAt(0));
+  }
+  if neg {
+    result = 0 - result;
+  }
+  return result;
 }
-
-function compareSemver(a, b) {
-    let pa = parseSemver(a);
-    let pb = parseSemver(b);
-    if pa == null or pb == null { return null; }
-
-    if pa.major != pb.major {
-        return pa.major > pb.major ? 1 : -1;
-    }
-    if pa.minor != pb.minor {
-        return pa.minor > pb.minor ? 1 : -1;
-    }
-    if pa.patch != pb.patch {
-        return pa.patch > pb.patch ? 1 : -1;
-    }
-
-    // both have no pre-release or same pre-release
-    if pa.pre == "" and pb.pre == "" { return 0; }
-    // no pre-release > has pre-release
-    if pa.pre == "" and pb.pre != "" { return 1; }
-    if pa.pre != "" and pb.pre == "" { return -1; }
-    // compare pre-release lexically
-    if pa.pre > pb.pre { return 1; }
-    if pa.pre < pb.pre { return -1; }
-    return 0;
+function lowerCase(str) {
+  return str.toLowerCase();
 }
-
-function bumpSemver(str, kind) {
-    let p = parseSemver(str);
-    if p == null { return null; }
-
-    if kind == "major" {
-        return f"{p.major + 1}.0.0";
+function trimStr(str) {
+  return str.trim();
+}
+function splitStr(str, sep) {
+  return str.split(sep);
+}
+function aliasToNumber(token, fieldIndex) {
+  var lowered = lowerCase(token);
+  if fieldIndex == 3 {
+    var mi = 0;
+    for null; mi < MONTH_ALIASES.length; mi = mi + 1 {
+      if MONTH_ALIASES[mi] == lowered {
+        return mi + 1;
+      }
     }
-    if kind == "minor" {
-        return f"{p.major}.{p.minor + 1}.0";
+  }
+  if fieldIndex == 4 {
+    var wi = 0;
+    for null; wi < WEEKDAY_ALIASES.length; wi = wi + 1 {
+      if WEEKDAY_ALIASES[wi] == lowered {
+        return wi;
+      }
     }
-    if kind == "patch" {
-        return f"{p.major}.{p.minor}.{p.patch + 1}";
+  }
+  return null;
+}
+function parseFieldToken(token, fieldIndex) {
+  // token can be: * | */N | A | A-B | A-B/N | A,B,... handled by caller
+  var min = FIELD_MIN[fieldIndex];
+  var max = FIELD_MAX[fieldIndex];
+  var Step = 1;
+  var base = token;
+  var slashPos = base.indexOf("/");
+  if slashPos != -1 {
+    var StepStr = base.substring(slashPos + 1, base.length);
+    base = base.substring(0, slashPos);
+    var StepVal = toInt(StepStr);
+    if StepVal == null or StepVal <= 0 {
+      return null;
     }
+    Step = StepVal;
+  }
+  var rangeStart = min;
+  var rangeEnd = max;
+  if base == "*" {
+    rangeStart = min;
+    rangeEnd = max;
+  } else {
+    var dashPos = base.indexOf("-");
+    if dashPos != -1 {
+      var startStr = base.substring(0, dashPos);
+      var endStr = base.substring(dashPos + 1, base.length);
+      var startVal = toInt(startStr);
+      var endVal = toInt(endStr);
+      if startVal == null {
+        startVal = aliasToNumber(startStr, fieldIndex);
+      }
+      if endVal == null {
+        endVal = aliasToNumber(endStr, fieldIndex);
+      }
+      if startVal == null or endVal == null {
+        return null;
+      }
+      rangeStart = startVal;
+      rangeEnd = endVal;
+    } else {
+      var singleVal = toInt(base);
+      if singleVal == null {
+        singleVal = aliasToNumber(base, fieldIndex);
+      }
+      if singleVal == null {
+        return null;
+      }
+      rangeStart = singleVal;
+      rangeEnd = singleVal;
+    }
+  }
+  if fieldIndex == 4 {
+    if rangeStart == 7 {
+      rangeStart = 0;
+    }
+    if rangeEnd == 7 {
+      rangeEnd = 0;
+    }
+  }
+  if rangeStart < min or rangeStart > max or rangeEnd < min or rangeEnd > max {
     return null;
+  }
+  if rangeStart > rangeEnd {
+    return null;
+  }
+  var values = [];
+  var v = rangeStart;
+  for null; v <= rangeEnd; v = v + Step {
+    values.push(v);
+  }
+  return values;
 }
-
-function stringifySemver(p) {
-    if p == null { return null; }
-    let base = f"{p.major}.{p.minor}.{p.patch}";
-    if p.pre != "" { base = base + "-" + p.pre; }
-    if p.build != "" { base = base + "+" + p.build; }
-    return base;
+function parseField(fieldStr, fieldIndex) {
+  var parts = splitStr(fieldStr, ",");
+  var all = [];
+  var pi = 0;
+  for null; pi < parts.length; pi = pi + 1 {
+    var vals = parseFieldToken(trimStr(parts[pi]), fieldIndex);
+    if vals == null {
+      return null;
+    }
+    var vi = 0;
+    for null; vi < vals.length; vi = vi + 1 {
+      var val = vals[vi];
+      var already = false;
+      var ci = 0;
+      for null; ci < all.length; ci = ci + 1 {
+        if all[ci] == val {
+          already = true;
+        }
+      }
+      if not already {
+        all.push(val);
+      }
+    }
+  }
+  // sort ascending (simple insertion sort, no built-in sort dependency)
+  var si = 1;
+  for null; si < all.length; si = si + 1 {
+    var key = all[si];
+    var sj = si - 1;
+    while sj >= 0 and all[sj] > key {
+      all[sj + 1] = all[sj];
+      sj = sj - 1;
+    }
+    all[sj + 1] = key;
+  }
+  return all;
 }
-
-function satisfiesSemver(str, range) {
-    let p = parseSemver(str);
-    if p == null { return false; }
-
-    // strip leading whitespace
-    range = range.trim();
-
-    // caret ^ — compatible with version (same major)
-    if range.startsWith("^") {
-        let rp = parseSemver(range.slice(1));
-        if rp == null { return false; }
-        if p.major != rp.major { return false; }
-        return compareSemver(str, range.slice(1)) >= 0;
+// ---------- public: parse ----------
+function parseCron(expr) {
+  if expr == null or expr == "" {
+    return { ok: false, error: "empty expression" };
+  }
+  var trimmed = trimStr(expr);
+  var rawFields = splitStr(trimmed, " ");
+  // collapse multiple spaces: filter out empty tokens
+  var fields = [];
+  var fi = 0;
+  for null; fi < rawFields.length; fi = fi + 1 {
+    if rawFields[fi] != "" {
+      fields.push(rawFields[fi]);
     }
-
-    // tilde ~ — patch level compatible (same major.minor)
-    if range.startsWith("~") {
-        let rp = parseSemver(range.slice(1));
-        if rp == null { return false; }
-        if p.major != rp.major { return false; }
-        if p.minor != rp.minor { return false; }
-        return compareSemver(str, range.slice(1)) >= 0;
-    }
-
-    // >= <= > < =
-    if range.startsWith(">=") {
-        return compareSemver(str, range.slice(2)) >= 0;
-    }
-    if range.startsWith("<=") {
-        return compareSemver(str, range.slice(2)) <= 0;
-    }
-    if range.startsWith(">") {
-        return compareSemver(str, range.slice(1)) > 0;
-    }
-    if range.startsWith("<") {
-        return compareSemver(str, range.slice(1)) < 0;
-    }
-    if range.startsWith("=") {
-        return compareSemver(str, range.slice(1)) == 0;
-    }
-
-    // exact match
-    return compareSemver(str, range) == 0;
+  }
+  if fields.length != 5 {
+    return { ok: false, error: "expected 5 fields (minute hour day month weekday), got " + fields.length };
+  }
+  var minute = parseField(fields[0], 0);
+  if minute == null {
+    return { ok: false, error: "invalid minute field: " + fields[0] };
+  }
+  var hour = parseField(fields[1], 1);
+  if hour == null {
+    return { ok: false, error: "invalid hour field: " + fields[1] };
+  }
+  var day = parseField(fields[2], 2);
+  if day == null {
+    return { ok: false, error: "invalid day field: " + fields[2] };
+  }
+  var month = parseField(fields[3], 3);
+  if month == null {
+    return { ok: false, error: "invalid month field: " + fields[3] };
+  }
+  var weekday = parseField(fields[4], 4);
+  if weekday == null {
+    return { ok: false, error: "invalid weekday field: " + fields[4] };
+  }
+  return { ok: true, error: null, minute: minute, hour: hour, day: day, month: month, weekday: weekday, source: trimmed };
 }
-
-let semver = {
-    parse: parseSemver,
-    valid: validSemver,
-    compare: compareSemver,
-    gt(a, b) { return compareSemver(a, b) > 0; },
-    lt(a, b) { return compareSemver(a, b) < 0; },
-    eq(a, b) { return compareSemver(a, b) == 0; },
-    bump: bumpSemver,
-    stringify: stringifySemver,
-    satisfies: satisfiesSemver,
-};
-
-export semver;
+function validCron(expr) {
+  var result = parseCron(expr);
+  return result.ok;
+}
+// ---------- date helpers (manual, no Date-object dependency for logic core) ----------
+function isLeapYear(year) {
+  if year % 4 != 0 {
+    return false;
+  }
+  if year % 100 != 0 {
+    return true;
+  }
+  if year % 400 != 0 {
+    return false;
+  }
+  return true;
+}
+function daysInMonth(year, month) {
+  var days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if month == 2 and isLeapYear(year) {
+    return 29;
+  }
+  return days[month - 1];
+}
+// day-of-week via Zeller-ish congruence, returns 0=Sunday..6=Saturday
+function dayOfWeek(year, month, day) {
+  var y = year;
+  var m = month;
+  if m < 3 {
+    m = m + 12;
+    y = y - 1;
+  }
+  var k = y % 100;
+  var j = (y - k) / 100;
+  var h = (day + ((13 * (m + 1)) / 5 | 0) + k + ((k / 4) | 0) + ((j / 4) | 0) + 5 * j) % 7;
+  // h: 0=Saturday,1=Sunday,...
+  var mapped = (h + 6) % 7;
+  // convert to 0=Sunday..6=Saturday
+  return mapped;
+}
+function contains(list, value) {
+  var i = 0;
+  for null; i < list.length; i = i + 1 {
+    if list[i] == value {
+      return true;
+    }
+  }
+  return false;
+}
+// ---------- public: matches ----------
+// dateParts: { year, month, day, hour, minute }
+function matchesCron(schedule, dateParts) {
+  if not schedule.ok {
+    return false;
+  }
+  if not contains(schedule.minute, dateParts.minute) {
+    return false;
+  }
+  if not contains(schedule.hour, dateParts.hour) {
+    return false;
+  }
+  if not contains(schedule.month, dateParts.month) {
+    return false;
+  }
+  var dowRestricted = schedule.day.length != (FIELD_MAX[2] - FIELD_MIN[2] + 1);
+  var dwRestricted = schedule.weekday.length != (FIELD_MAX[4] - FIELD_MIN[4] + 1 - 1);
+  // 0..7 collapses to 0..6
+  var dow = dayOfWeek(dateParts.year, dateParts.month, dateParts.day);
+  var dayOk = contains(schedule.day, dateParts.day);
+  var weekdayOk = contains(schedule.weekday, dow);
+  if dowRestricted and dwRestricted {
+    if not dayOk and not weekdayOk {
+      return false;
+    }
+  } else if dowRestricted {
+    if not dayOk {
+      return false;
+    }
+  } else if dwRestricted {
+    if not weekdayOk {
+      return false;
+    }
+  }
+  return true;
+}
+// ---------- public: next ----------
+// fromParts: { year, month, day, hour, minute }
+// returns next matching dateParts strictly after fromParts, scanning minute by minute
+// limitIterations guards against runaway loops (default large cap)
+function nextCron(schedule, fromParts, limitIterations) {
+  if not schedule.ok {
+    return null;
+  }
+  var cap = limitIterations;
+  if cap == null or cap == undefined {
+    cap = 527040;
+    // one year of minutes
+  }
+  var year = fromParts.year;
+  var month = fromParts.month;
+  var day = fromParts.day;
+  var hour = fromParts.hour;
+  var minute = fromParts.minute;
+  var count = 0;
+  while count < cap {
+    minute = minute + 1;
+    if minute > 59 {
+      minute = 0;
+      hour = hour + 1;
+      if hour > 23 {
+        hour = 0;
+        day = day + 1;
+        var dim = daysInMonth(year, month);
+        if day > dim {
+          day = 1;
+          month = month + 1;
+          if month > 12 {
+            month = 1;
+            year = year + 1;
+          }
+        }
+      }
+    }
+    var candidate = { year: year, month: month, day: day, hour: hour, minute: minute };
+    if matchesCron(schedule, candidate) {
+      return candidate;
+    }
+    count = count + 1;
+  }
+  return null;
+}
+function prevCron(schedule, fromParts, limitIterations) {
+  if not schedule.ok {
+    return null;
+  }
+  var cap = limitIterations;
+  if cap == null or cap == undefined {
+    cap = 527040;
+  }
+  var year = fromParts.year;
+  var month = fromParts.month;
+  var day = fromParts.day;
+  var hour = fromParts.hour;
+  var minute = fromParts.minute;
+  var count = 0;
+  while count < cap {
+    minute = minute - 1;
+    if minute < 0 {
+      minute = 59;
+      hour = hour - 1;
+      if hour < 0 {
+        hour = 23;
+        day = day - 1;
+        if day < 1 {
+          month = month - 1;
+          if month < 1 {
+            month = 12;
+            year = year - 1;
+          }
+          day = daysInMonth(year, month);
+        }
+      }
+    }
+    var candidate = { year: year, month: month, day: day, hour: hour, minute: minute };
+    if matchesCron(schedule, candidate) {
+      return candidate;
+    }
+    count = count + 1;
+  }
+  return null;
+}
+// ---------- public: describe ----------
+function padTwo(n) {
+  var s = "" + n;
+  if s.length < 2 {
+    s = "0" + s;
+  }
+  return s;
+}
+function listToStr(list, offset) {
+  var s = "";
+  var i = 0;
+  for null; i < list.length; i = i + 1 {
+    if i > 0 {
+      s = s + ",";
+    }
+    s = s + ("" + list[i]);
+  }
+  return s;
+}
+function describeCron(schedule) {
+  if not schedule.ok {
+    return "invalid cron expression: " + schedule.error;
+  }
+  var isFull = function_isFull(schedule.minute, FIELD_MIN[0], FIELD_MAX[0]);
+  var minuteStr;
+  if isFull {
+    minuteStr = "every minute";
+  } else {
+    minuteStr = "at minute " + listToStr(schedule.minute);
+  }
+  var hourFull = function_isFull(schedule.hour, FIELD_MIN[1], FIELD_MAX[1]);
+  var hourStr;
+  if hourFull {
+    hourStr = "of every hour";
+  } else {
+    hourStr = "past hour " + listToStr(schedule.hour);
+  }
+  var dayFull = function_isFull(schedule.day, FIELD_MIN[2], FIELD_MAX[2]);
+  var dayStr;
+  if dayFull {
+    dayStr = "on every day";
+  } else {
+    dayStr = "on day " + listToStr(schedule.day);
+  }
+  var monthFull = function_isFull(schedule.month, FIELD_MIN[3], FIELD_MAX[3]);
+  var monthStr;
+  if monthFull {
+    monthStr = "of every month";
+  } else {
+    monthStr = "in month " + listToStr(schedule.month);
+  }
+  var weekdayFull = schedule.weekday.length >= 7;
+  var weekdayStr;
+  if weekdayFull {
+    weekdayStr = "on any weekday";
+  } else {
+    weekdayStr = "on weekday " + listToStr(schedule.weekday);
+  }
+  return minuteStr + " " + hourStr + " " + dayStr + " " + monthStr + " " + weekdayStr;
+}
+function function_isFull(list, min, max) {
+  var expectedLen = max - min + 1;
+  if list.length != expectedLen {
+    return false;
+  }
+  return true;
+}
+// ---------- public: stringify (schedule -> normalized cron string) ----------
+function rangeToToken(values, min, max) {
+  if function_isFull(values, min, max) {
+    return "*";
+  }
+  return listToStr(values);
+}
+function stringifyCron(schedule) {
+  if not schedule.ok {
+    return "";
+  }
+  var m = rangeToToken(schedule.minute, FIELD_MIN[0], FIELD_MAX[0]);
+  var h = rangeToToken(schedule.hour, FIELD_MIN[1], FIELD_MAX[1]);
+  var d = rangeToToken(schedule.day, FIELD_MIN[2], FIELD_MAX[2]);
+  var mo = rangeToToken(schedule.month, FIELD_MIN[3], FIELD_MAX[3]);
+  var w = rangeToToken(schedule.weekday, FIELD_MIN[4], FIELD_MAX[4]);
+  return m + " " + h + " " + d + " " + mo + " " + w;
+}
+// ---------- exports ----------
+var CronModule = { parse: parseCron, valid: validCron, matches: matchesCron, next: nextCron, prev: prevCron, describe: describeCron, stringify: stringifyCron };
+export CronModule;
